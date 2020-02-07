@@ -1,62 +1,103 @@
 use super::Error;
+use crate::event::{self, Event, Message, NetEvent, NetEventKind};
+use crate::room::{
+    self,
+    net::{Action, ActionKind},
+};
 use crate::sequence_number::SequenceNumber;
-use std::collections::HashMap;
-use std::sync::mpsc;
 
-use crate::room;
 pub struct App {
+    id: room::Id,
     handle: room::ServerHandle,
-    rooms: HashMap<room::Id, room::ServerHandle>,
     room_sn: SequenceNumber,
-    input_notification: mpsc::Sender<crate::event::Event>,
 }
 
 impl App {
-    pub fn new(
-        input_notification: mpsc::Sender<crate::event::Event>,
-        handle: room::ServerHandle,
-    ) -> Self {
+    pub fn new(id: room::Id, handle: room::ServerHandle) -> Self {
         Self {
+            id,
             handle,
-            rooms: HashMap::new(),
             room_sn: SequenceNumber::new(),
-            input_notification,
         }
     }
 }
 
 impl App {
-    pub fn start(self) {
-        std::thread::spawn(move || loop {
-            eprintln!("Yor");
-            let ev = match self.handle.request.recv() {
-                Ok(ev) => ev,
-                Err(_) => break,
-            };
+    async fn send(&mut self, event: Event) {
+        self.handle.input.send(event).await.unwrap()
+    }
 
-            match ev {
-                x => eprintln!("APP REQUEST: {:#?}", x),
+    pub fn start(mut self) {
+        tokio::spawn(async move {
+            loop {
+                eprintln!("Yor");
+                let action = match self.handle.request.recv().await {
+                    Some(action) => action,
+                    None => break,
+                };
+
+                let Action { action, .. } = action;
+                match action {
+                    ActionKind::Connect => {
+                        self.send(NetEvent::to_event(
+                            self.id.clone(),
+                            NetEventKind::Error("Cannot disconnect from main room".to_string()),
+                        ))
+                        .await
+                    }
+                    ActionKind::Disconnect => {
+                        self.send(NetEvent::to_event(
+                            self.id.clone(),
+                            NetEventKind::Error("Cannot disconnect from main room".to_string()),
+                        ))
+                        .await
+                    }
+                    ActionKind::Publish(packet) => {
+                        self.send(NetEvent::to_event(
+                            self.id.clone(),
+                            NetEventKind::Message(Message {
+                                date: "Yesterday".to_string(),
+                                source: "Me".to_string(),
+                                message: packet,
+                            }),
+                        ))
+                        .await
+                    }
+                    ActionKind::NewRoom(room) => match self.spawn(room) {
+                        Ok(room) => {
+                            self.send(NetEvent::to_event(
+                                self.id.clone(),
+                                NetEventKind::NewRoom(room),
+                            ))
+                            .await
+                        }
+                        Err(e) => {
+                            let error = format!("{:?}", e);
+                            self.send(NetEvent::to_event(
+                                self.id.clone(),
+                                NetEventKind::Error(error),
+                            ))
+                            .await
+                        }
+                    },
+                }
             }
         });
     }
 
-    fn _spawn(
-        &mut self,
-        id: room::StringId,
-        handle: room::ServerHandle,
-    ) -> Result<room::Id, Error> {
-        let mut tokens: Vec<_> = id.split(' ').collect();
-        if tokens.is_empty() {
-            return Err(Error::BadId(format!("No server type specified!")));
+    fn spawn(&mut self, room: room::net::NewRoom) -> Result<event::NewRoom, Error> {
+        let room::net::NewRoom { alias, command } = room;
+        let mut tokens: Vec<_> = command.split(' ').collect();
+        if tokens.len() < 2 {
+            return Err(Error::BadId("No server type specified!".to_string()));
         }
-        let room_id = self.room_sn.next();
         let s_type = tokens.remove(0);
         match s_type {
             "matrix" => {
-                if tokens.len() < 1 {
-                    return Err(Error::BadId(format!(
-                        "Syntax: matrix <url> [username [password]]"
-                    )));
+                if tokens.is_empty() {
+                    return Err(Error::BadId(
+                        "Syntax: matrix <url> [username [password]]".to_string(),
+                    ));
                 }
                 let credentials = if tokens.len() >= 2 {
                     let username = tokens[1].to_string();
@@ -65,23 +106,31 @@ impl App {
                 } else {
                     None
                 };
+                let id = [&self.id[..], &[self.room_sn.next()]].concat();
+                let room::Handle { client, server } = room::Handle::new();
                 let server = super::matrix::Server::new(
+                    id.clone(),
                     super::matrix::Conf {
                         url: tokens[0].to_string(),
                         sync_period: 1024,
                         credentials,
                     },
-                    handle,
-                    self.input_notification.clone(),
+                    server,
+                    client.request.clone(),
                 );
                 let server = match server {
                     Ok(s) => s,
                     Err(e) => return Err(Error::BadId(format!("Bad matrix ID: {:?}", e))),
                 };
+                let server_thread = server.start();
+                tokio::spawn(server_thread);
+                Ok(event::NewRoom {
+                    id: Some(id),
+                    alias,
+                    requester: client.request,
+                })
             }
-            s_type => return Err(Error::BadId(format!("Unknown server type '{}'", s_type))),
+            s_type => Err(Error::BadId(format!("Unknown server type '{}'", s_type))),
         }
-        // TODO Start server client
-        Ok(room_id)
     }
 }

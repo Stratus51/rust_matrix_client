@@ -12,6 +12,9 @@ termion = "1"
 unicode-width = "0"
 itertools = "0"
 hyper = "0"
+hyper-tls = "0"
 ruma-client = { git = "https://github.com/ruma/ruma-client.git" }
 futures-util = "0"
 ruma-identifiers = "0"
+ruma-events = "0"
+tokio = { version = "0", features = ["full"] }
