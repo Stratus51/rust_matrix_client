@@ -1,9 +1,15 @@
 pub use crate::io;
 use crate::room;
+use chrono::offset::Utc;
 pub use ruma_events::collections::only::Event as MatrixEvent;
 pub use ruma_events::presence::PresenceState as MatrixPresence;
+use std::fmt;
 pub use termion::event::{Key, MouseEvent};
 use tokio::sync::mpsc;
+
+fn now() -> usize {
+    Utc::now().timestamp() as usize
+}
 
 // ==============================================================================================
 // Events
@@ -15,27 +21,25 @@ pub enum Event {
     Net(NetEvent),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message {
-    pub date: String,
-    pub source: String,
-    pub message: String,
+    pub content: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Unknown {
     pub ty: String,
     pub data: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PresenceState {
     Offline,
     Online,
     Unavailable,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Presence {
     pub id: String,
     pub display_name: Option<String>,
@@ -44,7 +48,7 @@ pub struct Presence {
     pub presence: MatrixPresence,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NewRoom {
     pub id: Option<room::Id>,
     pub alias: String,
@@ -52,7 +56,7 @@ pub struct NewRoom {
 }
 
 // TODO source? timestamp?
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NetEventKind {
     Connected,
     Disconnected,
@@ -66,33 +70,45 @@ pub enum NetEventKind {
 
 #[derive(Debug)]
 pub struct NetEvent {
+    pub date: usize,
     pub room: room::Id,
+    pub source: Option<String>, // TODO ID instead
     pub event: NetEventKind,
 }
 
-impl NetEventKind {
-    pub fn to_string(&self) -> (String, String) {
-        match self {
-            NetEventKind::Connected => ("ROOM".to_string(), "Connected".to_string()),
-            NetEventKind::Disconnected => ("ROOM".to_string(), "Disconnected".to_string()),
-            NetEventKind::Invite => ("ROOM".to_string(), "Invite".to_string()),
-            NetEventKind::Message(ev) => (
-                [ev.date.as_str(), ": ", &ev.source, ": "].concat(),
-                ev.message.clone(),
-            ),
-            NetEventKind::NewRoom(r) => ("SPAWN".to_string(), format!("Room  {:?}", r)),
-            NetEventKind::Presence(p) => ("PRES".to_string(), format!("Presence  {:?}", p)),
-            NetEventKind::Error(s) => ("ERROR: ".to_string(), s.clone()),
-            NetEventKind::Unknown(ev) => {
-                (["UNKNOWN EVENT: ", &ev.ty, ": "].concat(), ev.data.clone())
+impl fmt::Display for NetEventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                NetEventKind::Connected => "Room connected".to_string(),
+                NetEventKind::Disconnected => "Room disconnected".to_string(),
+                NetEventKind::Invite => "Room invitation".to_string(),
+                NetEventKind::Message(ev) => {
+                    ev.content.clone()
+                }
+                NetEventKind::NewRoom(r) => format!("Spawned room  {:?}", r),
+                NetEventKind::Presence(p) => format!("Presence  {:?}", p),
+                NetEventKind::Error(s) => ["ERROR: ".to_string(), s.clone()].concat(),
+                NetEventKind::Unknown(ev) => ["UNKNOWN EVENT: ", &ev.ty, ": ", &ev.data].concat(),
             }
-        }
+        )
     }
 }
 
-impl NetEvent {
-    pub fn to_event(room: room::Id, event: NetEventKind) -> Event {
-        Event::Net(NetEvent { room, event })
+impl NetEventKind {
+    pub fn to_event(&self, room: room::Id, date: usize, source: Option<String>) -> Event {
+        Event::Net(NetEvent {
+            date,
+            room,
+            source,
+            event: self.clone(),
+        })
+    }
+
+    pub fn to_current_event(&self, room: room::Id, source: Option<String>) -> Event {
+        self.to_event(room, now(), source)
     }
 }
 
@@ -112,8 +128,11 @@ pub enum Action {
 
 #[derive(Debug)]
 pub enum CommandAction {
-    Save,
+    Connect,
+    Disconnect,
+    NewRoom(room::net::NewRoom),
     Quit,
+    Save,
 }
 
 #[derive(Debug)]

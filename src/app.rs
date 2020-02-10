@@ -2,13 +2,17 @@ use crate::event::{
     Action, AppAction, CommandAction, Event, EventProcessor, InputAction, Key, NetEvent,
     NetEventKind,
 };
+use crate::gui_dbg;
 use crate::input::{command::Command, Input};
 use crate::room;
+use crate::sequence_number::SequenceNumber;
 use crate::widget::Height;
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 use termion::raw::IntoRawMode;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tui::backend::TermionBackend;
 use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
@@ -55,52 +59,9 @@ pub struct Options {
     pub max_input_height: u16,
 }
 
-pub struct RoomTree {
+pub struct Room {
     ui: room::ui::Room,
     net_sender: mpsc::Sender<room::net::Action>,
-    children: HashMap<usize, RoomTree>,
-}
-
-impl RoomTree {
-    fn new(
-        id: room::Id,
-        room_conf: room::ui::Conf,
-        net_sender: mpsc::Sender<room::net::Action>,
-    ) -> Self {
-        Self {
-            ui: room::ui::Room::new(id, room_conf),
-            net_sender,
-            children: HashMap::new(),
-        }
-    }
-
-    fn to_string_list(&self, cursor: Option<&[usize]>) -> (Vec<String>, Option<usize>) {
-        let cursor = cursor.filter(|c| !c.is_empty());
-        let mut ret = vec![];
-        ret.push(self.ui.conf.alias.clone());
-
-        let (cursor_index, node_cursor) = match cursor {
-            Some(list) => (Some(list[0]), &list[1..]),
-            None => (None, &[] as &[usize]),
-        };
-        let mut final_cursor = None;
-        for (name, node) in self.children.iter() {
-            let node_ret = if let Some(index) = cursor_index {
-                if *name == index {
-                    let (node_ret, c_i) = node.to_string_list(Some(node_cursor));
-                    final_cursor = c_i.map(|index| index + ret.len());
-                    node_ret.iter().map(|s| [" ", &s].concat()).collect()
-                } else {
-                    node.to_string_list(None).0
-                }
-            } else {
-                node.to_string_list(None).0
-            };
-
-            ret.extend_from_slice(&node_ret[..]);
-        }
-        (ret, final_cursor)
-    }
 }
 
 enum LoopAction {
@@ -112,7 +73,8 @@ pub struct App {
     options: Options,
 
     context: Context,
-    room_tree: RoomTree,
+    rooms: HashMap<room::Id, Room>,
+    rooms_id: Vec<room::Id>,
     current_room: room::Id,
 
     input: Input,
@@ -121,87 +83,82 @@ pub struct App {
 
     receiver: mpsc::Receiver<Event>,
     pub sender: mpsc::Sender<Event>,
+
+    room_sn: Arc<Mutex<SequenceNumber>>,
 }
 
 impl App {
     pub fn new(options: Options) -> Self {
         let (sender, receiver) = mpsc::channel(100);
-        Self {
+        let mut ret = Self {
             options,
             context: Context::new(),
-            room_tree: Self::root_room_tree(sender.clone()),
-            current_room: vec![],
+            rooms: HashMap::new(),
+            rooms_id: vec![],
+            current_room: 0,
             input: Input::default(),
             command: Command::default(),
             focus: Focus::None,
             receiver,
             sender,
-        }
+            room_sn: Arc::new(Mutex::new(SequenceNumber::default())),
+        };
+        ret.add_root_room();
+        ret
     }
 
-    fn root_room_tree(sender: mpsc::Sender<Event>) -> RoomTree {
+    fn add_root_room(&mut self) {
+        let id = self.room_sn.try_lock().unwrap().next().unwrap();
+
         let (tx, rx) = mpsc::channel(10);
-        let app = room::net::app::App::new(vec![], room::ServerHandle::new(sender, rx));
+        let app = room::net::app::App::new(
+            id,
+            room::ServerHandle::new(self.sender.clone(), rx),
+            self.room_sn.clone(),
+        );
         app.start();
-
-        RoomTree::new(
-            vec![],
-            room::ui::Conf {
-                alias: "main".to_string(),
-                meta_width: 8,
-            },
-            tx,
-        )
-    }
-
-    fn get_room(&self, id: &[usize]) -> Option<&RoomTree> {
-        let mut node = &self.room_tree;
-        for i in id.iter() {
-            // TODO manage error paths
-            node = node.children.get(i)?;
-        }
-        Some(node)
-    }
-
-    fn get_mut_room(&mut self, id: &[usize]) -> Option<&mut RoomTree> {
-        let mut node = &mut self.room_tree;
-        for i in id.iter() {
-            // TODO manage error paths
-            node = node.children.get_mut(i)?;
-        }
-        Some(node)
+        self.add_room(id, "main".to_string(), tx);
     }
 
     fn add_room(&mut self, id: room::Id, name: String, requester: mpsc::Sender<room::net::Action>) {
-        let child_id = id[id.len() - 1];
-        let parent_id = id[..id.len() - 1].to_vec();
-        self.get_mut_room(&parent_id)
-            .unwrap() // TODO Manage this with more tolerance?
-            .children
-            .insert(
-                child_id,
-                RoomTree::new(
+        match self.rooms.insert(
+            id,
+            Room {
+                ui: room::ui::Room::new(
                     id,
                     room::ui::Conf {
                         alias: name,
-                        meta_width: 8,
+                        meta_width: 16,
                     },
-                    requester,
                 ),
-            );
+                net_sender: requester,
+            },
+        ) {
+            None => (),
+            Some(_) => panic!("Room ID collision !"),
+        }
+        self.rooms_id.push(id);
     }
 
-    fn room(&mut self) -> &RoomTree {
-        self.get_room(&self.current_room).unwrap()
+    fn get_mut_room(&mut self, id: room::Id) -> Option<&mut Room> {
+        self.rooms.get_mut(&id)
     }
 
-    fn mut_room(&mut self) -> &mut RoomTree {
-        self.get_mut_room(&self.current_room.clone()).unwrap()
+    fn get_room(&self, id: room::Id) -> Option<&Room> {
+        self.rooms.get(&id)
+    }
+
+    fn mut_room(&mut self) -> &mut Room {
+        self.get_mut_room(self.rooms_id[self.current_room]).unwrap()
+    }
+
+    fn room(&self) -> &Room {
+        self.get_room(self.rooms_id[self.current_room]).unwrap()
     }
 
     async fn room_send(&mut self, action: room::net::ActionKind) {
         let action = room::net::Action {
-            room: self.current_room.clone(),
+            room: self.current_room,
             action,
         };
         self.mut_room()
@@ -222,6 +179,13 @@ impl App {
             Action::Command(act) => match act {
                 CommandAction::Save => panic!(),
                 CommandAction::Quit => ret.push(LoopAction::Quit),
+                CommandAction::NewRoom(r) => {
+                    self.room_send(room::net::ActionKind::NewRoom(r)).await
+                }
+                CommandAction::Connect => self.room_send(room::net::ActionKind::Connect).await,
+                CommandAction::Disconnect => {
+                    self.room_send(room::net::ActionKind::Disconnect).await
+                }
             },
             Action::Room(_) => todo!(),
             Action::App(act) => match act {
@@ -234,18 +198,30 @@ impl App {
     }
 
     fn process_net_event(&mut self, event: NetEvent) -> Vec<Action> {
-        match event.event {
-            NetEventKind::Connected => todo!(),
-            NetEventKind::Disconnected => todo!(),
-            NetEventKind::Invite => todo!(),
-            NetEventKind::Message(_) => todo!(),
+        let NetEvent {
+            date,
+            room,
+            event,
+            source,
+        } = event;
+        match event {
+            ev @ NetEventKind::Connected
+            | ev @ NetEventKind::Disconnected
+            | ev @ NetEventKind::Invite
+            | ev @ NetEventKind::Message(_)
+            | ev @ NetEventKind::Presence(_)
+            | ev @ NetEventKind::Error(_)
+            | ev @ NetEventKind::Unknown(_) => match self.get_mut_room(room) {
+                Some(r) => r.ui.process_event(ev.to_event(room, date, source)),
+                None => {
+                    eprintln!("Received message from dead room {}: {:?}", room, ev);
+                    vec![]
+                }
+            },
             NetEventKind::NewRoom(r) => {
                 self.add_room(r.id.unwrap(), r.alias, r.requester);
                 vec![]
             }
-            NetEventKind::Presence(_) => todo!(),
-            NetEventKind::Error(_) => todo!(),
-            NetEventKind::Unknown(_) => todo!(),
         }
     }
 
@@ -259,6 +235,7 @@ impl App {
     }
 
     fn process_context_less_event(&mut self, event: Event) -> Vec<Action> {
+        // TODO The ergonomy of these shortcuts is very debatable
         match event {
             Event::Key(k) => match k {
                 Key::Char(c) => match c {
@@ -273,12 +250,24 @@ impl App {
                         vec![]
                     }
                     ':' => {
-                        // self.command.receive_focus();
+                        self.command.receive_focus();
                         self.focus = Focus::Command;
                         vec![]
                     }
                     _ => vec![],
                 },
+                Key::Down => {
+                    if self.current_room < self.rooms_id.len() - 1 {
+                        self.current_room += 1;
+                    }
+                    vec![]
+                }
+                Key::Up => {
+                    if self.current_room > 0 {
+                        self.current_room -= 1;
+                    }
+                    vec![]
+                }
                 Key::Esc => vec![Action::FocusLoss],
                 _ => vec![],
             },
@@ -295,20 +284,35 @@ impl App {
         terminal.hide_cursor()?;
 
         'main: loop {
-            eprintln!("plip plop draw");
+            gui_dbg!(
+                "--------------------------------------------------------------------------------"
+            );
+            gui_dbg!(
+                "================================================================================"
+            );
+            gui_dbg!("New frame");
+            gui_dbg!(
+                "================================================================================"
+            );
+            gui_dbg!(
+                "--------------------------------------------------------------------------------"
+            );
             // UI refresh -------------------------------------------------------
             terminal.draw(|mut f| {
-                eprintln!("termion size");
-                let (t_w, _t_h) = match termion::terminal_size() {
+                gui_dbg!("================================================================================");
+                gui_dbg!("Widget precalculations");
+                gui_dbg!("================================================================================");
+                let (t_w, t_h) = match termion::terminal_size() {
                     Ok((w, h)) => (w, h),
                     Err(e) => panic!("{:#?}", e),
                 };
-                eprintln!("wanted size");
-                let mut input_size = self.input.height(t_w);
-                if input_size > self.options.max_input_height as usize {
-                    input_size = self.options.max_input_height as usize;
-                }
-                eprintln!("input size: {}", input_size);
+                let  input_size = if let Focus::Input = self.focus {
+                    usize::min(self.input.height(t_w), t_h as usize/2)
+                } else if self.input.text_widget.text.is_empty() {
+                    0
+                } else {
+                    usize::min(self.input.height(t_w), 5)
+                };
 
                 let main_layout = Layout::default()
                     .direction(Direction::Vertical)
@@ -328,28 +332,41 @@ impl App {
                     .constraints([Constraint::Percentage(20), Constraint::Percentage(80)].as_ref())
                     .split(main_layout[0]);
 
-                let (room_list, room_cursor) =
-                    self.room_tree.to_string_list(Some(&self.current_room[..]));
+                let room_list: Vec<_> = self
+                    .rooms_id
+                    .iter()
+                    .map(|id| self.rooms.get(id).unwrap().ui.conf.alias.clone()).collect();
 
+                // TODO OPTIM: Redraw only widget that have changed
+                gui_dbg!("================================================================================");
+                gui_dbg!("Rendering room list");
+                gui_dbg!("================================================================================");
                 SelectableList::default()
                     .block(Block::default().title("Room list").borders(Borders::ALL))
                     .items(&room_list)
-                    .select(room_cursor)
+                    .select(Some(self.current_room))
                     .style(Style::default().fg(Color::White))
                     .highlight_style(Style::default().modifier(Modifier::ITALIC).bg(Color::Blue))
                     .render(&mut f, content_layout[0]);
 
-                let mut block = Block::default().title("Room").borders(Borders::ALL);
+                gui_dbg!("================================================================================");
+                gui_dbg!("Rendering current room");
+                gui_dbg!("================================================================================");
+                let mut block = Block::default().title(&self.room().ui.conf.alias).borders(Borders::ALL);
                 block.render(&mut f, content_layout[1]);
                 let room_space = block.inner(content_layout[1]);
-                eprintln!("print rooms");
                 self.mut_room().ui.render(&mut f, room_space);
 
-                eprintln!("print input");
+                gui_dbg!("================================================================================");
+                gui_dbg!("Rendering input");
+                gui_dbg!("================================================================================");
                 self.input.render(&mut f, main_layout[1]);
                 Paragraph::new(self.build_status_line().iter()).render(&mut f, main_layout[2]);
 
                 if let Focus::Command = self.focus {
+                    gui_dbg!("================================================================================");
+                    gui_dbg!("Rendering command");
+                    gui_dbg!("================================================================================");
                     let t_size = f.size();
                     if t_size.height >= 5 {
                         let command_layout = tui::layout::Rect {

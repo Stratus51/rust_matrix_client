@@ -39,11 +39,23 @@ pub struct EditableText {
 
 impl EditableText {
     pub fn new(text: &str) -> Self {
-        Self {
-            lines: text.split('\n').map(|s| Line::new(s)).collect(),
-            lines_widths: vec![0],
+        let mut ret = Self {
+            lines: vec![],
+            lines_widths: vec![],
             cursor: TextCursor { line: 0, char: 0 },
             allow_cursor_over_limit: false,
+        };
+        ret.set_text(text);
+        ret
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        let lines: Vec<_> = text.split('\n').map(|s| Line::new(s)).collect();
+        let nb_lines = lines.len();
+        self.lines = lines;
+        self.lines_widths = vec![0; nb_lines];
+        for i in 0..nb_lines {
+            self.update_line_width(i);
         }
     }
 
@@ -69,7 +81,8 @@ impl EditableText {
     pub fn height(&self, width: u16) -> usize {
         self.lines_widths
             .iter()
-            .map(|l_w| usize::max((l_w + width as usize - 1) / width as usize, 1))
+            .map(|l_w| (l_w + width as usize - 1) / width as usize)
+            .map(|h| usize::max(h, 1))
             .sum()
     }
 
@@ -97,7 +110,6 @@ impl EditableText {
             self.lines_widths.insert(l_i + 1, 0);
             self.cursor.line += 1;
             self.cursor.char = 0;
-            eprintln!("brand new line! {:?}", self.cursor);
         } else {
             let mut old_line = vec![];
             let mut new_line = vec![];
@@ -120,7 +132,6 @@ impl EditableText {
 
             self.cursor.line += 1;
             self.cursor.char = 0;
-            eprintln!("Line split! {:?}", self.cursor);
         }
     }
 
@@ -251,6 +262,14 @@ impl EditableText {
             self.cursor.char -= 1;
         }
     }
+
+    pub fn home(&mut self) {
+        self.cursor.char = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.cursor.char = self.line_limit();
+    }
 }
 
 impl EditableText {
@@ -265,9 +284,7 @@ impl EditableText {
     fn lines_from_area<'a>(&'a self, area: tui::layout::Rect, line_i: usize) -> Vec<&'a Line> {
         let mut height = 0;
         let mut ret = vec![];
-        eprintln!("lines_from_area");
         for (w, line) in self.lines_widths.iter().zip(self.lines.iter()).skip(line_i) {
-            eprintln!("  {}, {}", w, line.line);
             ret.push(line);
             height += w / area.width as usize;
             if height >= area.height as usize {
@@ -286,9 +303,7 @@ impl EditableText {
         gline_i: usize,
         show_cursor: bool,
     ) -> Vec<StringBlockItem> {
-        eprintln!("self.is_empty");
         if self.is_empty() {
-            eprintln!("self.is_empty true");
             if show_cursor {
                 return vec![StringBlockItem {
                     x: area.x,
@@ -303,23 +318,19 @@ impl EditableText {
 
         let mut ret = vec![];
         let mut height = 0;
-        eprintln!("into self.lines_from_area");
+        let mut cursor_block = None;
         for (i, line) in self.lines_from_area(area, line_i).iter().enumerate() {
-            eprintln!("Line {} ({}, {})", i, show_cursor, self.cursor.line);
             // Build graphic line blocks
             let (list, cursor) = if show_cursor && i == self.cursor.line {
-                eprintln!("line.to_cursor_block");
                 line.to_cursor_block(area.width, self.cursor.char)
             } else {
-                eprintln!("line.to_block");
                 (line.to_block(area.width), None)
             };
 
             // Add cursor if present
             if let Some(cursor) = cursor {
-                eprintln!("CURSOR! {:?}", cursor);
                 if cursor.line < area.height as usize {
-                    ret.push(StringBlockItem {
+                    cursor_block = Some(StringBlockItem {
                         x: area.x + cursor.char as u16,
                         y: area.y + height + cursor.line as u16,
                         s: cursor.c.to_string(),
@@ -352,6 +363,9 @@ impl EditableText {
                 break;
             }
         }
+        if let Some(block) = cursor_block {
+            ret.push(block);
+        }
         ret
     }
 
@@ -366,6 +380,7 @@ impl EditableText {
         let mut ret = vec![];
         let mut line_string = vec![];
         let mut line_width = 0;
+        let mut cursor_block = None;
         for (i, c) in self.lines[line_i]
             .chars()
             .skip(pos)
@@ -379,7 +394,7 @@ impl EditableText {
 
             line_string.push(c);
             if show_cursor && i == self.cursor.char {
-                ret.push(StringBlockItem {
+                cursor_block = Some(StringBlockItem {
                     x: area.x + line_width as u16,
                     y: area.y,
                     s: c.to_string(),
@@ -398,12 +413,15 @@ impl EditableText {
             },
         );
         if self.cursor.char == self.lines[line_i].chars().count() && line_width < width as usize {
-            ret.push(StringBlockItem {
+            cursor_block = Some(StringBlockItem {
                 x: area.x + line_width as u16,
                 y: area.y,
                 s: " ".to_string(),
                 style: CURSOR_STYLE,
             });
+        }
+        if let Some(block) = cursor_block {
+            ret.push(block);
         }
         ret
     }

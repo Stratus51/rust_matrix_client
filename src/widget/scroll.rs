@@ -86,14 +86,18 @@ impl Widget for Scroll {
         // Move view
         let view_move = self.next_move;
         self.next_move = 0;
-        if view_move < 0 {
-            for i in 0..-view_move {
-                self._down(area.width);
+        match view_move.cmp(&0) {
+            std::cmp::Ordering::Less => {
+                for _ in 0..-view_move {
+                    self._down(area.width);
+                }
             }
-        } else if view_move > 0 {
-            for i in 0..view_move {
-                self._up(area.width);
+            std::cmp::Ordering::Greater => {
+                for _ in 0..view_move {
+                    self._up(area.width);
+                }
             }
+            std::cmp::Ordering::Equal => (),
         }
 
         // Draw
@@ -103,9 +107,9 @@ impl Widget for Scroll {
 
             if i == 0 {
                 let mut area = area;
-                area.height =
-                    usize::min(w_h - self.cursor.y, (area.height - height) as usize) as u16;
+                area.height = usize::min(w_h - self.cursor.y, area.height as usize) as u16;
                 widget.partial_draw(self.cursor.y, area, buf);
+                height += area.height;
             } else {
                 let mut area = area;
                 area.y += height;

@@ -1,3 +1,4 @@
+pub mod room_entry;
 pub mod scroll;
 pub mod text;
 

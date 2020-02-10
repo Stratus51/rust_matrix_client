@@ -6,7 +6,7 @@ pub mod net;
 pub mod ui;
 
 pub type StringId = String;
-pub type Id = Vec<usize>;
+pub type Id = usize;
 
 // =============================================================================
 // Room handles
@@ -23,11 +23,11 @@ impl ServerHandle {
         ServerHandle {
             input,
             request,
-            request_sn: SequenceNumber::new(),
+            request_sn: SequenceNumber::default(),
         }
     }
     pub fn request_id(&mut self) -> usize {
-        self.request_sn.next()
+        self.request_sn.next().unwrap()
     }
 }
 
@@ -43,15 +43,15 @@ pub struct Handle {
     pub client: ClientHandle,
 }
 
-impl Handle {
-    pub fn new() -> Self {
+impl Default for Handle {
+    fn default() -> Self {
         let (input_sender, input_receiver) = mpsc::channel(10);
         let (request_sender, request_receiver) = mpsc::channel(10);
         Self {
             server: ServerHandle {
                 input: input_sender,
                 request: request_receiver,
-                request_sn: SequenceNumber::new(),
+                request_sn: SequenceNumber::default(),
             },
             client: ClientHandle {
                 input: input_receiver,

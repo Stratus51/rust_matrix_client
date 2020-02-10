@@ -1,4 +1,8 @@
 use crate::text::editable_text::{EditableText, StringBlockItem};
+use crate::widget::{
+    scroll::{Element, PartialWidget},
+    Height,
+};
 
 #[derive(Debug)]
 pub struct ViewPosition {
@@ -29,8 +33,8 @@ impl Text {
         }
     }
 
-    pub fn height(&self, width: u16) -> usize {
-        self.text.height(width)
+    pub fn set_text(&mut self, text: &str) {
+        self.text.set_text(text);
     }
 
     fn fix_view_pos(&mut self, area: tui::layout::Rect, one_line: bool) {
@@ -55,12 +59,27 @@ impl Text {
 impl tui::widgets::Widget for Text {
     fn draw(&mut self, area: tui::layout::Rect, buf: &mut tui::buffer::Buffer) {
         // Fix text_cursor to follow terminal size changes and cursor movements
-        eprintln!("self.fix_view_pos");
         self.fix_view_pos(area, self.one_line);
+        self.partial_draw(0, area, buf);
+    }
+}
 
+impl Height for Text {
+    fn height(&self, width: u16) -> usize {
+        self.text.height(width)
+    }
+}
+
+impl PartialWidget for Text {
+    fn partial_draw(
+        &mut self,
+        y_offset: usize,
+        mut area: tui::layout::Rect,
+        buf: &mut tui::buffer::Buffer,
+    ) {
         // Draw
+        area.height += y_offset as u16;
         let lines = if self.one_line {
-            eprintln!("self.text.to_line_block");
             self.text.to_line_block(
                 area,
                 self.text.cursor.line,
@@ -69,7 +88,6 @@ impl tui::widgets::Widget for Text {
                 self.show_cursor,
             )
         } else {
-            eprintln!("self.text.to_block");
             self.text.to_block(
                 area,
                 self.view_pos.line,
@@ -77,25 +95,21 @@ impl tui::widgets::Widget for Text {
                 self.show_cursor,
             )
         };
-        eprintln!("area: {:?}, Buf: {:?}", area, buf.area());
-        for StringBlockItem {
-            x,
-            y,
-            s: line,
-            style,
-        } in lines.into_iter()
+        for (
+            y_i,
+            StringBlockItem {
+                x,
+                y,
+                s: line,
+                style,
+            },
+        ) in lines.into_iter().enumerate()
         {
-            eprintln!("line: [{};{}]: {}", x, y, line);
-            eprintln!(
-                "buf.set_stringn {} {} {} {} {:?}",
-                area.x + x,
-                area.y + y,
-                line,
-                area.width as usize,
-                style
-            );
-            buf.set_stringn(x, y, line, area.width as usize, style);
+            if y_i >= y_offset {
+                buf.set_stringn(x, y - y_offset as u16, line, area.width as usize, style);
+            }
         }
-        eprintln!("done");
     }
 }
+
+impl Element for Text {}

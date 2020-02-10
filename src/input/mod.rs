@@ -43,7 +43,7 @@ impl std::fmt::Display for Mode {
 
 pub struct Input {
     mode: Mode,
-    text_widget: Text,
+    pub text_widget: Text,
     command: Command,
     focused: bool,
 }
@@ -83,7 +83,6 @@ impl Input {
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
         self.text_widget.show_cursor = focused;
-        eprintln!("focused {}", focused);
     }
 
     // Mode event processing implementation
@@ -92,8 +91,12 @@ impl Input {
             Event::Key(k) => match k {
                 Key::Char(c) => {
                     match c {
-                        'i' => self.mode = Mode::Edit(EditMode::Insert),
+                        'i' => {
+                            self.text_widget.text.allow_cursor_over_limit = true;
+                            self.mode = Mode::Edit(EditMode::Insert);
+                        }
                         'a' => {
+                            self.text_widget.text.allow_cursor_over_limit = true;
                             self.text_widget.text.right();
                             self.mode = Mode::Edit(EditMode::Insert);
                         }
@@ -110,6 +113,8 @@ impl Input {
                 Key::Down => self.text_widget.text.down(),
                 Key::Right => self.text_widget.text.right(),
                 Key::Left => self.text_widget.text.left(),
+                Key::Home => self.text_widget.text.home(),
+                Key::End => self.text_widget.text.end(),
                 Key::Esc => return vec![Action::FocusLoss],
                 _ => (),
             },
@@ -119,18 +124,16 @@ impl Input {
         vec![]
     }
     fn process_insert_event(&mut self, event: Event) -> Vec<Action> {
-        eprintln!("process_insert_event: {:?}", event);
         match event {
             Event::Key(k) => match k {
-                Key::Char(c) => {
-                    eprintln!("Key::Char({})", c);
-                    self.text_widget.text.insert(c)
-                }
+                Key::Char(c) => self.text_widget.text.insert(c),
                 Key::Backspace => self.text_widget.text.backspace(),
                 Key::Up => self.text_widget.text.up(),
                 Key::Down => self.text_widget.text.down(),
                 Key::Right => self.text_widget.text.right(),
                 Key::Left => self.text_widget.text.left(),
+                Key::Home => self.text_widget.text.home(),
+                Key::End => self.text_widget.text.end(),
                 Key::Esc => {
                     self.mode = Mode::None;
                     return vec![Action::App(AppAction::StatusSet(self.mode.to_string()))];
@@ -150,6 +153,8 @@ impl Input {
                 Key::Down => self.text_widget.text.down(),
                 Key::Right => self.text_widget.text.right(),
                 Key::Left => self.text_widget.text.left(),
+                Key::Home => self.text_widget.text.home(),
+                Key::End => self.text_widget.text.end(),
                 Key::Esc => {
                     self.mode = Mode::None;
                     return vec![Action::App(AppAction::StatusSet(self.mode.to_string()))];
@@ -169,7 +174,6 @@ impl EventProcessor for Input {
     }
 
     fn process_event(&mut self, event: Event) -> Vec<Action> {
-        eprintln!("PRoc event");
         let tmp_ret = match &self.mode {
             Mode::None => self.process_none_event(event),
             Mode::Edit(mode) => match mode {
@@ -196,6 +200,7 @@ impl EventProcessor for Input {
                     } else {
                         self.mode = Mode::None;
                         focus_loss = true;
+                        self.text_widget.text.allow_cursor_over_limit = false;
                     }
                 }
                 Action::Command(cmd) => match cmd {
@@ -216,6 +221,7 @@ impl EventProcessor for Input {
                         // simple quit won't mean anything anymore
                         ret.push(Action::Command(CommandAction::Quit))
                     }
+                    x => ret.push(Action::Command(x)),
                 },
                 act => ret.push(act),
             }

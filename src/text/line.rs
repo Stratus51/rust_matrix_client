@@ -30,6 +30,9 @@ impl Line {
     pub fn len(&self) -> usize {
         self.line.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     pub fn push(&mut self, c: char) {
         self.line.push(c)
     }
@@ -61,10 +64,9 @@ impl Line {
             // Else, add it to the current line
             } else {
                 chunk.push(c);
-                chunk_w += c_w;
             }
         }
-        if !chunk.is_empty() {
+        if !chunk.is_empty() || chunks.is_empty() {
             chunks.push(chunk.into_iter().collect::<String>());
         }
         chunks
@@ -83,7 +85,6 @@ impl Line {
         for (i, c) in line.chars().enumerate() {
             let c_w = char_width(c);
             chunk_w += c_w;
-            eprintln!("{} => {}", c, c_w);
 
             // If we overflow the line, add the character to the next line
             if chunk_w > width as usize {
@@ -105,13 +106,11 @@ impl Line {
             }
         }
 
-        eprintln!("{}, {}", pos, line.chars().count());
         if pos >= line.chars().count() {
             if chunk_w >= width as usize {
                 chunks.push(String::new());
                 chunk_w = 0;
             }
-            eprintln!("Block pos! {}", chunk_w);
             block_pos = Some(CharPosition {
                 c: ' ',
                 line: chunks.len(),
@@ -119,7 +118,7 @@ impl Line {
             });
         }
 
-        if !chunk.is_empty() {
+        if !chunk.is_empty() || chunks.is_empty() {
             chunks.push(chunk.into_iter().collect::<String>());
         }
         (chunks, block_pos)

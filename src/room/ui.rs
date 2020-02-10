@@ -1,6 +1,5 @@
 use crate::event::{Action, Event, EventProcessor, Key, NetEvent};
-use crate::room;
-use crate::widget::{scroll::Scroll, text::Text};
+use crate::widget::{room_entry, room_entry::RoomEntry, scroll::Scroll};
 use std::collections::HashMap;
 
 use super::{Id, StringId};
@@ -84,6 +83,24 @@ impl EventProcessor for Room {
             },
             Event::Mouse(_) => (),
             Event::Net(ev) => {
+                // TODO Process events as content editing entries
+                let text = ev.event.to_string();
+
+                let widget = Box::new(RoomEntry::new(
+                    room_entry::Meta {
+                        date: ev.date,
+                        sender: ev.source.clone(),
+                    },
+                    &text,
+                    room_entry::Conf {
+                        meta_width: self.conf.meta_width,
+                    },
+                ));
+
+                // TODO Rebuild the full UI
+                self.widget.push(widget);
+
+                // Save the event
                 self.events.push(ev);
             }
         };

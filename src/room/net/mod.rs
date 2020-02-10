@@ -5,16 +5,19 @@ pub mod matrix;
 
 #[derive(Debug)]
 pub struct NewRoom {
-    alias: String,
-    command: String,
+    pub alias: String,
+    pub command: Vec<String>,
 }
 
 #[derive(Debug)]
 pub enum ActionKind {
+    Sync,
     Connect,
     Disconnect,
     Publish(String),
     NewRoom(NewRoom),
+    // TODO Add configuration action
+    // Configuration(String),
 }
 
 #[derive(Debug)]

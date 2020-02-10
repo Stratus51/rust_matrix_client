@@ -10,7 +10,6 @@ use tokio::sync::mpsc;
 pub fn io_to_sink(mut sender: mpsc::Sender<crate::event::Event>) {
     let stdin = stdin();
     for c in stdin.events() {
-        eprintln!("EV {:?}", c);
         let evt = c.unwrap();
         // TODO Manage error case
         sender

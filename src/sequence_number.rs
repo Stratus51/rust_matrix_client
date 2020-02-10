@@ -3,14 +3,18 @@ pub struct SequenceNumber {
     sn: usize,
 }
 
-impl SequenceNumber {
-    pub fn new() -> Self {
-        Self { sn: 0 }
-    }
+impl Iterator for SequenceNumber {
+    type Item = usize;
 
-    pub fn next(&mut self) -> usize {
+    fn next(&mut self) -> Option<usize> {
         let ret = self.sn;
         self.sn += 1;
-        ret
+        Some(ret)
+    }
+}
+
+impl Default for SequenceNumber {
+    fn default() -> Self {
+        Self { sn: 0 }
     }
 }
