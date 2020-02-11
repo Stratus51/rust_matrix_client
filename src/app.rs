@@ -24,6 +24,7 @@ enum Focus {
     Room,
     Input,
     Command,
+    RoomList,
 }
 
 impl std::fmt::Display for Focus {
@@ -36,6 +37,7 @@ impl std::fmt::Display for Focus {
                 Focus::Room => "Room",
                 Focus::Input => "Message",
                 Focus::Command => "Command",
+                Focus::RoomList => "Room list",
             }
         )
     }
@@ -177,7 +179,10 @@ impl App {
                 }
             },
             Action::Command(act) => match act {
-                CommandAction::Save => panic!(),
+                CommandAction::Save => {
+                    let msg = self.input.text_widget.text.consume();
+                    self.room_send(room::net::ActionKind::Publish(msg)).await;
+                }
                 CommandAction::Quit => ret.push(LoopAction::Quit),
                 CommandAction::NewRoom(r) => {
                     self.room_send(room::net::ActionKind::NewRoom(r)).await
@@ -231,6 +236,7 @@ impl App {
             Focus::Room => self.mut_room().ui.process_event(event),
             Focus::Input => self.input.process_event(event),
             Focus::Command => self.command.process_event(event),
+            Focus::RoomList => self.process_room_list_event(event),
         }
     }
 
@@ -239,14 +245,31 @@ impl App {
         match event {
             Event::Key(k) => match k {
                 Key::Char(c) => match c {
-                    'm' => {
+                    'i' => {
                         self.focus = Focus::Input;
+                        self.input.set_insert_mode();
+                        self.input.receive_focus();
+                        vec![]
+                    }
+                    'a' => {
+                        self.focus = Focus::Input;
+                        self.input.set_append_mode();
                         self.input.receive_focus();
                         vec![]
                     }
                     'r' => {
+                        self.focus = Focus::Input;
+                        self.input.set_replace_mode();
+                        self.input.receive_focus();
+                        vec![]
+                    }
+                    'R' => {
                         self.mut_room().ui.receive_focus();
                         self.focus = Focus::Room;
+                        vec![]
+                    }
+                    'g' => {
+                        self.focus = Focus::RoomList;
                         vec![]
                     }
                     ':' => {
@@ -256,23 +279,35 @@ impl App {
                     }
                     _ => vec![],
                 },
-                Key::Down => {
-                    if self.current_room < self.rooms_id.len() - 1 {
-                        self.current_room += 1;
-                    }
-                    vec![]
-                }
-                Key::Up => {
-                    if self.current_room > 0 {
-                        self.current_room -= 1;
-                    }
-                    vec![]
-                }
-                Key::Esc => vec![Action::FocusLoss],
-                _ => vec![],
+                event => self.input.process_event(Event::Key(event)),
             },
-            _ => vec![],
+            event => self.input.process_event(event),
         }
+    }
+
+    fn process_room_list_event(&mut self, event: Event) -> Vec<Action> {
+        // TODO The ergonomy of these shortcuts is very debatable
+        match event {
+            Event::Key(k) => match k {
+                Key::Char(c) => match c {
+                    't' => {
+                        if self.current_room < self.rooms_id.len() - 1 {
+                            self.current_room += 1;
+                        }
+                    }
+                    'T' => {
+                        if self.current_room > 0 {
+                            self.current_room -= 1;
+                        }
+                    }
+                    _ => (),
+                },
+                _ => (),
+            },
+            _ => (),
+        }
+        self.focus = Focus::None;
+        vec![]
     }
 
     pub async fn run(&mut self) -> Result<(), Error> {

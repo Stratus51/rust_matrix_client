@@ -1,30 +1,12 @@
-use crate::event::{Action, AppAction, CommandAction, Event, EventProcessor, InputAction, Key};
+use crate::event::{Action, AppAction, Event, EventProcessor, Key};
 use crate::widget::{text::Text, Height};
 
 pub mod command;
-use command::Command;
-
-pub enum EditMode {
-    Insert,
-    Replace,
-}
-impl std::fmt::Display for EditMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                EditMode::Insert => "insert",
-                EditMode::Replace => "replace",
-            }
-        )
-    }
-}
 
 pub enum Mode {
     None,
-    Edit(EditMode),
-    Command,
+    Insert,
+    Replace,
 }
 
 impl std::fmt::Display for Mode {
@@ -33,9 +15,9 @@ impl std::fmt::Display for Mode {
             f,
             "{}",
             match self {
-                Mode::None => String::new(),
-                Mode::Edit(e) => format!("edit: {}", e.to_string()),
-                Mode::Command => "command".to_string(),
+                Mode::None => "",
+                Mode::Insert => "insert",
+                Mode::Replace => "replace",
             }
         )
     }
@@ -44,7 +26,6 @@ impl std::fmt::Display for Mode {
 pub struct Input {
     mode: Mode,
     pub text_widget: Text,
-    command: Command,
     focused: bool,
 }
 
@@ -53,7 +34,6 @@ impl Default for Input {
         Self {
             mode: Mode::None,
             text_widget: Text::new(&""),
-            command: Command::default(),
             focused: false,
         }
     }
@@ -68,14 +48,6 @@ impl Height for Input {
 impl tui::widgets::Widget for Input {
     fn draw(&mut self, area: tui::layout::Rect, buf: &mut tui::buffer::Buffer) {
         self.text_widget.draw(area, buf);
-
-        // If command mode, overwrite last line
-        if let Mode::Command = &self.mode {
-            let mut area = area;
-            area.y = area.y + area.height - 1;
-            area.height = 1;
-            self.command.draw(area, buf);
-        }
     }
 }
 
@@ -85,26 +57,47 @@ impl Input {
         self.text_widget.show_cursor = focused;
     }
 
+    pub fn set_append_mode(&mut self) {
+        if let Mode::None = self.mode {
+            self.set_insert_mode();
+            self.text_widget.text.right();
+        }
+    }
+
+    pub fn set_insert_mode(&mut self) {
+        if let Mode::None = self.mode {
+            self.text_widget.text.allow_cursor_over_limit = true;
+            self.mode = Mode::Insert;
+        }
+    }
+
+    pub fn set_replace_mode(&mut self) {
+        if let Mode::None = self.mode {
+            self.text_widget.text.allow_cursor_over_limit = true;
+            self.mode = Mode::Replace;
+        }
+    }
+
     // Mode event processing implementation
     fn process_none_event(&mut self, event: Event) -> Vec<Action> {
         match event {
             Event::Key(k) => match k {
                 Key::Char(c) => {
                     match c {
+                        'h' => self.text_widget.text.left(),
+                        'l' => self.text_widget.text.right(),
+                        'j' => self.text_widget.text.down(),
+                        'k' => self.text_widget.text.up(),
                         'i' => {
                             self.text_widget.text.allow_cursor_over_limit = true;
-                            self.mode = Mode::Edit(EditMode::Insert);
+                            self.mode = Mode::Insert;
                         }
                         'a' => {
                             self.text_widget.text.allow_cursor_over_limit = true;
                             self.text_widget.text.right();
-                            self.mode = Mode::Edit(EditMode::Insert);
+                            self.mode = Mode::Insert;
                         }
-                        'r' => self.mode = Mode::Edit(EditMode::Replace),
-                        ':' => {
-                            self.mode = Mode::Command;
-                            self.command.receive_focus();
-                        }
+                        'r' => self.mode = Mode::Replace,
                         _ => (),
                     };
                     return vec![Action::App(AppAction::StatusSet(self.mode.to_string()))];
@@ -115,7 +108,6 @@ impl Input {
                 Key::Left => self.text_widget.text.left(),
                 Key::Home => self.text_widget.text.home(),
                 Key::End => self.text_widget.text.end(),
-                Key::Esc => return vec![Action::FocusLoss],
                 _ => (),
             },
             Event::Mouse(_) => (),
@@ -135,8 +127,9 @@ impl Input {
                 Key::Home => self.text_widget.text.home(),
                 Key::End => self.text_widget.text.end(),
                 Key::Esc => {
+                    self.text_widget.text.left();
                     self.mode = Mode::None;
-                    return vec![Action::App(AppAction::StatusSet(self.mode.to_string()))];
+                    return vec![Action::FocusLoss];
                 }
                 x => eprintln!("_ = {:?}", x),
             },
@@ -156,8 +149,9 @@ impl Input {
                 Key::Home => self.text_widget.text.home(),
                 Key::End => self.text_widget.text.end(),
                 Key::Esc => {
+                    self.text_widget.text.left();
                     self.mode = Mode::None;
-                    return vec![Action::App(AppAction::StatusSet(self.mode.to_string()))];
+                    return vec![Action::FocusLoss];
                 }
                 _ => (),
             },
@@ -176,11 +170,8 @@ impl EventProcessor for Input {
     fn process_event(&mut self, event: Event) -> Vec<Action> {
         let tmp_ret = match &self.mode {
             Mode::None => self.process_none_event(event),
-            Mode::Edit(mode) => match mode {
-                EditMode::Insert => self.process_insert_event(event),
-                EditMode::Replace => self.process_replace_event(event),
-            },
-            Mode::Command => self.command.process_event(event),
+            Mode::Insert => self.process_insert_event(event),
+            Mode::Replace => self.process_replace_event(event),
         };
 
         // TODO It is debatable whether we should allow the use of multi layer commands (quit,
@@ -188,7 +179,6 @@ impl EventProcessor for Input {
         // does not interpret it)
         let mut ret = vec![];
         let mut focus_loss = false;
-        let mut trigger_message = false;
         for act in tmp_ret.into_iter() {
             match act {
                 Action::FocusLoss => {
@@ -203,26 +193,6 @@ impl EventProcessor for Input {
                         self.text_widget.text.allow_cursor_over_limit = false;
                     }
                 }
-                Action::Command(cmd) => match cmd {
-                    CommandAction::Save => {
-                        if trigger_message {
-                            ret.push(Action::Command(CommandAction::Save));
-                        } else {
-                            trigger_message = true;
-                            ret.push(Action::Input(InputAction::Message(
-                                self.text_widget.text.consume(),
-                            )));
-                        }
-                    }
-                    CommandAction::Quit => {
-                        // TODO Don't know what to do
-                        // Quitting input mode is a single Esc press.
-                        // Throwing the input text should require a force option but then the
-                        // simple quit won't mean anything anymore
-                        ret.push(Action::Command(CommandAction::Quit))
-                    }
-                    x => ret.push(Action::Command(x)),
-                },
                 act => ret.push(act),
             }
         }

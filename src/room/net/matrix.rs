@@ -429,6 +429,7 @@ impl Server {
         }
     }
 
+    // TODO Split
     async fn sync(&mut self) -> Result<(), ErrorBatch> {
         dbg!("sync");
         if self.client.is_none() {
@@ -530,18 +531,45 @@ impl Server {
         // TODO Watch out for disconnections (trigger reconnect)
         dbg!("Starting matrix thread");
         while let Some(action) = self.request.recv().await {
-            dbg!("ev!");
-            let res = if action.room == self.id {
-                self.process_server_action(action.action).await
+            // Collect all actions and dedup sync requests
+            let mut sync = if let room::net::ActionKind::Sync = action.action {
+                true
             } else {
-                self.process_sub_room_action(action).await
+                false
             };
-            if let Err(e) = res {
-                for e in e.errors.iter() {
-                    if e.id == self.id {
-                        self.send_error(&e.error).await;
-                    } else {
-                        self.send_error_as(e.id, &e.error).await;
+
+            let mut actions = vec![action];
+            while let Ok(action) = self.request.try_recv() {
+                // TODO Should we just always request a sync after any type of action?
+                if let room::net::ActionKind::Sync = action.action {
+                    sync = true;
+                } else {
+                    sync = true;
+                    actions.push(action);
+                }
+            }
+            if sync {
+                actions.push(room::net::Action {
+                    room: self.id,
+                    action: room::net::ActionKind::Sync,
+                });
+            }
+
+            // Process all actions
+            for action in actions.into_iter() {
+                dbg!("ev!");
+                let res = if action.room == self.id {
+                    self.process_server_action(action.action).await
+                } else {
+                    self.process_sub_room_action(action).await
+                };
+                if let Err(e) = res {
+                    for e in e.errors.iter() {
+                        if e.id == self.id {
+                            self.send_error(&e.error).await;
+                        } else {
+                            self.send_error_as(e.id, &e.error).await;
+                        }
                     }
                 }
             }

@@ -20,6 +20,7 @@ impl Command {
             self.history_cursor -= 1;
             self.text_widget
                 .set_text(&self.history[self.history_cursor]);
+            self.text_widget.text.end();
         }
     }
 
@@ -28,6 +29,7 @@ impl Command {
             self.history_cursor += 1;
             self.text_widget
                 .set_text(&self.history[self.history_cursor]);
+            self.text_widget.text.end();
         }
     }
 }
